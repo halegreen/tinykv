@@ -177,6 +177,7 @@ func newRaft(c *Config) *Raft {
 		Vote:             None,
 	}
 	raft.step = raft.stepFollower
+	raft.becomeFollower(raft.Term, None)
 	for _, peer := range c.peers {
 		raft.votes[peer] = false
 		if peer == raft.id {
@@ -237,13 +238,35 @@ func (r *Raft) tickHeartbeat() {
 // campaign transfer a raft node state to candidate state.
 func (r *Raft) campaign() {
 	r.becomeCandidate()
-	for peer, _ := range r.Prs {
-		r.msgs = append(r.msgs, pb.Message{From: r.id, To: peer, Term: r.Term, MsgType: pb.MessageType_MsgRequestVote})
-	}
 	r.votes[r.id] = true
 	if r.quorumVoteWon() {
 		r.becomeLeader()
+	} else if r.quorumVoteLost() {
+		r.becomeFollower(r.Term, None)
 	}
+	// send msgVote to peers
+	for peer, _ := range r.Prs {
+		r.sendMsg(pb.Message{From: r.id, To: peer, Term: r.Term, MsgType: pb.MessageType_MsgRequestVote})
+	}
+}
+
+func (r *Raft) sendMsg(m pb.Message) {
+	r.msgs = append(r.msgs, m)
+}
+
+func (r *Raft) quorumVoteWon() bool {
+	votedCnt := 0
+	for _, voted := range r.votes {
+		if voted {
+			votedCnt++
+		}
+	}
+	return float64(votedCnt)/float64(len(r.votes)) > 0.5
+}
+
+func (r *Raft) quorumVoteLost() bool {
+	// TODO: how to detect quorum lost?
+	return false
 }
 
 // becomeFollower transform this peer's state to Follower
@@ -277,11 +300,22 @@ func (r *Raft) becomeLeader() {
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
 	switch {
-	case r.Term == 0:
+	case m.Term == 0:
 	case m.Term > r.Term:
 		if m.MsgType == pb.MessageType_MsgAppend || m.MsgType == pb.MessageType_MsgHeartbeat {
 			r.becomeFollower(m.Term, m.From)
+		} else {
+			r.becomeFollower(m.Term, None)
 		}
+	}
+
+	switch r.State {
+	case StateFollower:
+		r.step = r.stepFollower
+	case StateCandidate:
+		r.step = r.stepCandidate
+	case StateLeader:
+		r.step = r.stepLeader
 	}
 
 	switch m.MsgType {
@@ -297,7 +331,6 @@ func (r *Raft) Step(m pb.Message) error {
 func (r *Raft) stepFollower(m pb.Message) error {
 	switch m.MsgType {
 	case pb.MessageType_MsgHup:
-		//r.msgs = append(r.msgs, pb.Message{From: r.id, Term: r.Term, MsgType: pb.MessageType_MsgHup})
 		r.campaign()
 	case pb.MessageType_MsgRequestVote:
 		msg := pb.Message{From: r.id, To: m.From, Term: r.Term, MsgType: pb.MessageType_MsgRequestVoteResponse}
@@ -307,7 +340,7 @@ func (r *Raft) stepFollower(m pb.Message) error {
 		} else {
 			msg.Reject = true
 		}
-		r.msgs = append(r.msgs, msg)
+		r.sendMsg(msg)
 	}
 	return nil
 }
@@ -315,7 +348,6 @@ func (r *Raft) stepFollower(m pb.Message) error {
 func (r *Raft) stepCandidate(m pb.Message) error {
 	switch m.MsgType {
 	case pb.MessageType_MsgHup:
-		//r.msgs = append(r.msgs, pb.Message{From: r.id, Term: r.Term, MsgType: pb.MessageType_MsgHup})
 		r.campaign()
 	case pb.MessageType_MsgRequestVoteResponse:
 		if !m.Reject {
@@ -332,21 +364,17 @@ func (r *Raft) stepCandidate(m pb.Message) error {
 	return nil
 }
 
-func (r *Raft) quorumVoteWon() bool {
-	votedCnt := 0
-	for _, voted := range r.votes {
-		if voted {
-			votedCnt++
-		}
-	}
-	return float64(votedCnt)/float64(len(r.votes)) > 0.5
-}
-
 func (r *Raft) stepLeader(m pb.Message) error {
 	switch m.MsgType {
 	case pb.MessageType_MsgHeartbeat:
 		for peer, _ := range r.Prs {
-			r.msgs = append(r.msgs, pb.Message{From: r.id, To: peer, Term: r.Term, MsgType: pb.MessageType_MsgHeartbeat})
+			msg := pb.Message{From: r.id, To: peer, Term: r.Term, MsgType: pb.MessageType_MsgHeartbeat}
+			r.sendMsg(msg)
+		}
+	case pb.MessageType_MsgBeat:
+		for peer, _ := range r.Prs {
+			msg := pb.Message{From: r.id, To: peer, Term: r.Term, MsgType: pb.MessageType_MsgHeartbeat}
+			r.sendMsg(msg)
 		}
 	}
 	return nil
