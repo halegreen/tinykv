@@ -1,10 +1,12 @@
-# My Milestones
-- project1 done
+# 进度
+- [x] project1  done
 
-- project2
-    - project2aa (Leader election) done
+- [ ] project2
+    - [x] project2aa (Leader election) done
+
 
 # The TinyKV Course
+[Fork from talent-plan tinykv repo ](https://github.com/talent-plan/tinykv)
 
 The TinyKV course builds a key-value storage system with the Raft consensus algorithm. It is inspired by [MIT 6.824](https://pdos.csail.mit.edu/6.824/) and [TiKV Project](https://github.com/tikv/tikv).
 
